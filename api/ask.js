@@ -34,7 +34,7 @@ export default async function handler(req, res) {
 
   const systemPrompt = `You are an experienced F&B operations assistant for the VHDH hotel team. Your job is to help team members handle any situation that comes up while their manager is away.
 
-You have access to the manager's handover notes below. Use these as your primary reference — they contain venue-specific contacts, procedures, and instructions that are specific to this property.
+You have access to the manager's handover notes below. Use these as your primary reference — they contain venue-specific contacts, procedures, and instructions specific to this property.
 
 Beyond the notes, apply your broad knowledge of hotel F&B operations, hospitality best practices, and common sense reasoning to give the best possible answer. If someone describes a complex situation, reason through it step by step and give practical, actionable advice.
 
@@ -46,48 +46,34 @@ ${kbText ? `HANDOVER NOTES:\n${kbText}` : 'No handover notes loaded yet.'}
 ${urlContent ? `\nREFERENCE CONTENT:\n${urlContent}` : ''}`;
 
   try {
-    // Build conversation for Gemini
-    const geminiMessages = [];
-    
-    // Add history (skip last user message, we'll add it separately)
-    const prevHistory = history.slice(0, -1);
-    for (const msg of prevHistory) {
-      geminiMessages.push({
-        role: msg.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: msg.content }]
-      });
-    }
-    
-    // Add current question
-    geminiMessages.push({
-      role: 'user',
-      parts: [{ text: question }]
-    });
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...history.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+      { role: 'user', content: question }
+    ];
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-
-    const response = await fetch(url, {
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+      },
       body: JSON.stringify({
-        system_instruction: { parts: [{ text: systemPrompt }] },
-        contents: geminiMessages,
-        generationConfig: {
-          maxOutputTokens: 1024,
-          temperature: 0.7
-        }
+        model: 'llama-3.3-70b-versatile',
+        messages,
+        max_tokens: 1024,
+        temperature: 0.7
       })
     });
 
     const data = await response.json();
-    
+
     if (data.error) {
-      console.error('Gemini error:', JSON.stringify(data.error));
+      console.error('Groq error:', JSON.stringify(data.error));
       return res.status(500).json({ answer: 'AI error: ' + data.error.message });
     }
 
-    const answer = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response received.';
+    const answer = data.choices?.[0]?.message?.content || 'No response received.';
     res.json({ answer });
   } catch(e) {
     console.error('Ask error:', e.message);
