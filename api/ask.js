@@ -5,46 +5,71 @@ export default async function handler(req, res) {
   const entries = kb.entries || [];
   const urls = kb.urls || [];
 
-  // Smarter scoring — match against full content not just category name
   const q = question.toLowerCase();
   const keywords = q.split(/\s+/).filter(w => w.length > 2);
 
+  // Score entry against full content
   function scoreEntry(entry) {
-    const text = `${entry.category} ${entry.content || ''}`.toLowerCase();
+    const fullText = `${entry.category} ${entry.content || ''}`.toLowerCase();
     let score = 0;
     keywords.forEach(kw => {
-      if (text.includes(kw)) score += 2;
-      // Bonus for category name match
-      if (entry.category.toLowerCase().includes(kw)) score += 3;
+      const matches = (fullText.match(new RegExp(kw, 'g')) || []).length;
+      score += matches * 2;
+      if (entry.category.toLowerCase().includes(kw)) score += 4;
     });
-    // File content scoring
-    if (entry.files) {
-      entry.files.filter(f => f && f.content).forEach(f => {
-        const fc = f.content.toLowerCase();
-        keywords.forEach(kw => { if (fc.includes(kw)) score += 1; });
-      });
-    }
     return score;
+  }
+
+  // Extract most relevant chunk from a long entry
+  function extractRelevantChunk(content, maxChars = 1400) {
+    if (content.length <= maxChars) return content;
+
+    // Find the position of the best keyword match
+    let bestPos = 0;
+    let bestScore = 0;
+    keywords.forEach(kw => {
+      const idx = content.toLowerCase().indexOf(kw);
+      if (idx !== -1) {
+        // Count keyword density around this position
+        const window = content.slice(Math.max(0, idx - 200), idx + 200).toLowerCase();
+        const density = keywords.reduce((s, k) => s + (window.includes(k) ? 1 : 0), 0);
+        if (density > bestScore) { bestScore = density; bestPos = idx; }
+      }
+    });
+
+    // Extract a window around the best position
+    const start = Math.max(0, bestPos - 300);
+    const end = Math.min(content.length, start + maxChars);
+    let chunk = content.slice(start, end);
+
+    // Add prefix if we didn't start from the beginning
+    if (start > 0) chunk = '...' + chunk;
+    // Always include the beginning (first 300 chars) for context
+    const intro = content.slice(0, 300);
+    if (start > 300) chunk = intro + '\n...\n' + chunk;
+
+    return chunk.slice(0, maxChars);
   }
 
   const scored = entries
     .map(e => ({ entry: e, score: scoreEntry(e) }))
     .sort((a, b) => b.score - a.score);
 
-  // Send top 4 most relevant entries with more content per entry
+  // Top 4 relevant entries with smart chunking
   const relevant = scored.slice(0, 4).map(({ entry }) => {
-    let part = `[${entry.category}]\n${(entry.content || '').slice(0, 1200)}`;
+    const chunk = extractRelevantChunk(entry.content || '');
+    let part = `[${entry.category}]\n${chunk}`;
     if (entry.files && entry.files.length > 0) {
       const fc = entry.files
         .filter(f => f && f.content)
-        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 600)}`)
+        .map(f => `[File: ${f.name}]\n${extractRelevantChunk(f.content, 500)}`)
         .join('\n\n');
       if (fc) part += `\n\n${fc}`;
     }
     return part;
   });
 
-  // Always include short entries (contacts, logins) regardless of score
+  // Always include short entries (contacts, logins)
   const alwaysInclude = scored
     .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 400)
     .slice(0, 2)
@@ -61,7 +86,7 @@ export default async function handler(req, res) {
           const r = await fetch(u.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) });
           if (!r.ok) return null;
           const text = await r.text();
-          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000);
           return `[${u.label}]\n${clean}`;
         } catch(e) { return null; }
       })
@@ -69,9 +94,9 @@ export default async function handler(req, res) {
     urlContent = fetchResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).join('\n\n---\n\n');
   }
 
-  const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with any operational questions while their manager is away.
+  const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with operational questions while their manager is away.
 
-Use the handover notes below as your primary source. Apply hospitality knowledge and common sense for anything not covered. Be concise and practical. When listing packages, prices or steps always include all the details from the notes.
+Use the handover notes as your primary source. Be concise and practical. When listing packages, prices, minimum spends or steps always include all specific details and figures from the notes — never give vague answers when numbers are available.
 
 ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
@@ -89,7 +114,7 @@ ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${u
         model: 'llama-3.1-8b-instant',
         messages,
         max_tokens: 700,
-        temperature: 0.4
+        temperature: 0.3
       })
     });
 
