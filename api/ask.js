@@ -5,41 +5,54 @@ export default async function handler(req, res) {
   const entries = kb.entries || [];
   const urls = kb.urls || [];
 
-  // Smart context — score entries by relevance to the question
+  // Smarter scoring — match against full content not just category name
   const q = question.toLowerCase();
-  const keywords = q.split(/\s+/).filter(w => w.length > 3);
+  const keywords = q.split(/\s+/).filter(w => w.length > 2);
 
   function scoreEntry(entry) {
     const text = `${entry.category} ${entry.content || ''}`.toLowerCase();
-    return keywords.reduce((score, kw) => score + (text.includes(kw) ? 1 : 0), 0);
+    let score = 0;
+    keywords.forEach(kw => {
+      if (text.includes(kw)) score += 2;
+      // Bonus for category name match
+      if (entry.category.toLowerCase().includes(kw)) score += 3;
+    });
+    // File content scoring
+    if (entry.files) {
+      entry.files.filter(f => f && f.content).forEach(f => {
+        const fc = f.content.toLowerCase();
+        keywords.forEach(kw => { if (fc.includes(kw)) score += 1; });
+      });
+    }
+    return score;
   }
 
   const scored = entries
     .map(e => ({ entry: e, score: scoreEntry(e) }))
     .sort((a, b) => b.score - a.score);
 
-  // Top 5 most relevant entries, trimmed to 600 chars each
-  const relevant = scored.slice(0, 5).map(({ entry }) => {
-    let part = `[${entry.category}]\n${(entry.content || '').slice(0, 600)}`;
+  // Send top 4 most relevant entries with more content per entry
+  const relevant = scored.slice(0, 4).map(({ entry }) => {
+    let part = `[${entry.category}]\n${(entry.content || '').slice(0, 1200)}`;
     if (entry.files && entry.files.length > 0) {
       const fc = entry.files
         .filter(f => f && f.content)
-        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 800)}`)
+        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 600)}`)
         .join('\n\n');
       if (fc) part += `\n\n${fc}`;
     }
     return part;
   });
 
-  // Always include short entries like contacts/logins regardless of score
-  const always = scored
-    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 300)
-    .slice(0, 3)
+  // Always include short entries (contacts, logins) regardless of score
+  const alwaysInclude = scored
+    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 400)
+    .slice(0, 2)
     .map(({ entry }) => `[${entry.category}]\n${entry.content || ''}`);
 
-  const kbText = [...relevant, ...always].join('\n\n---\n\n');
+  const kbText = [...relevant, ...alwaysInclude].join('\n\n---\n\n');
 
-  // Fetch URL content — limit to 1500 chars per URL
+  // Fetch URL content
   let urlContent = '';
   if (urls.length > 0) {
     const fetchResults = await Promise.allSettled(
@@ -56,9 +69,9 @@ export default async function handler(req, res) {
     urlContent = fetchResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).join('\n\n---\n\n');
   }
 
-  const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with operational questions while their manager is away.
+  const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with any operational questions while their manager is away.
 
-Use the handover notes below as your primary source. Apply hospitality knowledge and common sense for anything not covered. Be concise and practical.
+Use the handover notes below as your primary source. Apply hospitality knowledge and common sense for anything not covered. Be concise and practical. When listing packages, prices or steps always include all the details from the notes.
 
 ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
@@ -75,8 +88,8 @@ ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${u
       body: JSON.stringify({
         model: 'llama-3.1-8b-instant',
         messages,
-        max_tokens: 600,
-        temperature: 0.5
+        max_tokens: 700,
+        temperature: 0.4
       })
     });
 
