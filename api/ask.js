@@ -5,63 +5,79 @@ export default async function handler(req, res) {
   const entries = kb.entries || [];
   const urls = kb.urls || [];
 
-  // Fetch URL content
+  // Smart context — score entries by relevance to the question
+  const q = question.toLowerCase();
+  const keywords = q.split(/\s+/).filter(w => w.length > 3);
+
+  function scoreEntry(entry) {
+    const text = `${entry.category} ${entry.content || ''}`.toLowerCase();
+    return keywords.reduce((score, kw) => score + (text.includes(kw) ? 1 : 0), 0);
+  }
+
+  const scored = entries
+    .map(e => ({ entry: e, score: scoreEntry(e) }))
+    .sort((a, b) => b.score - a.score);
+
+  // Top 5 most relevant entries, trimmed to 600 chars each
+  const relevant = scored.slice(0, 5).map(({ entry }) => {
+    let part = `[${entry.category}]\n${(entry.content || '').slice(0, 600)}`;
+    if (entry.files && entry.files.length > 0) {
+      const fc = entry.files
+        .filter(f => f && f.content)
+        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 800)}`)
+        .join('\n\n');
+      if (fc) part += `\n\n${fc}`;
+    }
+    return part;
+  });
+
+  // Always include short entries like contacts/logins regardless of score
+  const always = scored
+    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 300)
+    .slice(0, 3)
+    .map(({ entry }) => `[${entry.category}]\n${entry.content || ''}`);
+
+  const kbText = [...relevant, ...always].join('\n\n---\n\n');
+
+  // Fetch URL content — limit to 1500 chars per URL
   let urlContent = '';
   if (urls.length > 0) {
     const fetchResults = await Promise.allSettled(
       urls.map(async (u) => {
         try {
-          const r = await fetch(u.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) });
+          const r = await fetch(u.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) });
           if (!r.ok) return null;
           const text = await r.text();
-          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 4000);
-          return `[${u.label}] (${u.url})\n${clean}`;
+          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1500);
+          return `[${u.label}]\n${clean}`;
         } catch(e) { return null; }
       })
     );
     urlContent = fetchResults.filter(r => r.status === 'fulfilled' && r.value).map(r => r.value).join('\n\n---\n\n');
   }
 
-  // Build knowledge base text including file content
-  const kbParts = entries.map(e => {
-    let part = `[${e.category}]\n${e.content || ''}`;
-    if (e.files && e.files.length > 0) {
-      const fileContents = e.files
-        .filter(f => f && f.content)
-        .map(f => `--- File: ${f.name} ---\n${f.content}`)
-        .join('\n\n');
-      if (fileContents) part += `\n\n${fileContents}`;
-    }
-    return part;
-  });
-  const kbText = kbParts.join('\n\n===\n\n');
+  const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with operational questions while their manager is away.
 
-  const systemPrompt = `You are an experienced F&B operations assistant for the VHDH hotel team. Your job is to help team members handle any situation that comes up while their manager is away.
+Use the handover notes below as your primary source. Apply hospitality knowledge and common sense for anything not covered. Be concise and practical.
 
-You have access to the manager's handover notes, uploaded documents, and reference content below. Use these as your primary reference — they contain venue-specific contacts, procedures, financial data, and instructions specific to this property.
-
-Beyond the notes, apply your broad knowledge of hotel F&B operations, hospitality best practices, and common sense reasoning to give the best possible answer. If someone describes a complex situation, reason through it step by step and give practical, actionable advice.
-
-When answering questions about revenue, financials, or data from uploaded reports — reference the specific figures from the uploaded files.
-
-Only say something isn't covered if it's genuinely venue-specific information that isn't in the notes. For operational questions, always try to help even if the exact answer isn't in the notes.
-
-Be concise, practical, and direct. Mention which category or file the info came from when relevant.
-
-${kbText ? `HANDOVER NOTES & UPLOADED FILES:\n${kbText}` : 'No handover notes loaded yet.'}
-${urlContent ? `\nREFERENCE CONTENT FROM LINKED SYSTEMS:\n${urlContent}` : ''}`;
+${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
   try {
     const messages = [
       { role: 'system', content: systemPrompt },
-      ...history.slice(0, -1).map(m => ({ role: m.role, content: m.content })),
+      ...history.slice(-4).map(m => ({ role: m.role, content: m.content })),
       { role: 'user', content: question }
     ];
 
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
-      body: JSON.stringify({ model: 'llama-3.3-70b-versatile', messages, max_tokens: 1024, temperature: 0.7 })
+      body: JSON.stringify({
+        model: 'llama-3.1-8b-instant',
+        messages,
+        max_tokens: 600,
+        temperature: 0.5
+      })
     });
 
     const data = await response.json();
