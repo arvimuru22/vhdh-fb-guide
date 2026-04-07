@@ -4,6 +4,6 @@
   "description": "VHDH F&B Handover Guide — team knowledge base and chat assistant",
   "private": true,
   "dependencies": {
-    "@vercel/kv": "^1.0.1"
+    "@upstash/redis": "^1.34.3"
   }
 }
