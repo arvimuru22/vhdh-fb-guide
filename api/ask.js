@@ -5,49 +5,23 @@ export default async function handler(req, res) {
   const entries = kb.entries || [];
   const urls = kb.urls || [];
 
-  const q = question.toLowerCase();
-  const keywords = q.split(/\s+/).filter(w => w.length > 2);
-
-  function scoreEntry(entry) {
-    const fullText = `${entry.category} ${entry.content || ''}`.toLowerCase();
-    let score = 0;
-    keywords.forEach(kw => {
-      const matches = (fullText.match(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
-      score += matches * 2;
-      if (entry.category.toLowerCase().includes(kw)) score += 4;
-    });
-    return score;
-  }
-
-  const scored = entries
-    .map(e => ({ entry: e, score: scoreEntry(e) }))
-    .sort((a, b) => b.score - a.score);
-
-  // Top 2 entries: send FULL content (no truncation) — these are most relevant
-  const topTwo = scored.slice(0, 2).map(({ entry }) => {
-    let part = `[${entry.category}]\n${entry.content || ''}`;
+  // Send ALL entries — now that categories are small and focused this is safe
+  // Trim very large entries to 1500 chars, small ones sent in full
+  const kbParts = entries.map(entry => {
+    const content = entry.content || '';
+    const trimmed = content.length > 1500 ? content.slice(0, 1500) + '...' : content;
+    let part = `[${entry.category}]\n${trimmed}`;
     if (entry.files && entry.files.length > 0) {
       const fc = entry.files
         .filter(f => f && f.content)
-        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 600)}`)
+        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 400)}`)
         .join('\n\n');
       if (fc) part += `\n\n${fc}`;
     }
     return part;
   });
 
-  // Next 2 entries: trimmed to 500 chars
-  const nextTwo = scored.slice(2, 4).map(({ entry }) => {
-    return `[${entry.category}]\n${(entry.content || '').slice(0, 500)}`;
-  });
-
-  // Always include short entries
-  const alwaysInclude = scored
-    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 300)
-    .slice(0, 2)
-    .map(({ entry }) => `[${entry.category}]\n${entry.content || ''}`);
-
-  const kbText = [...topTwo, ...nextTwo, ...alwaysInclude].join('\n\n---\n\n');
+  const kbText = kbParts.join('\n\n---\n\n');
 
   // Fetch URL content
   let urlContent = '';
@@ -70,11 +44,12 @@ export default async function handler(req, res) {
 
 Answer naturally and conversationally — never say "according to the handover notes", "the notes say", or "based on the handover". Just answer directly as if you already know the information. Be specific — always include exact figures, prices, and minimum spends when they exist.
 
-CRITICAL — never guess or make up information. If the answer is not clearly in the notes provided, say: "I don't have that specific information — please check with your manager directly." It is far better to say you don't know than to give an incorrect answer. Only state facts you can see clearly in the notes.
+CRITICAL RULES:
+1. NEVER guess, assume, or make up information. If the answer is not clearly stated in the notes below, say exactly: "I don't have that specific information — please check with your manager directly." Never use words like "I would assume", "probably", or "I expect". Only state facts that are explicitly written in the notes.
+2. NEVER reveal passwords, login credentials, API keys, or access codes. If asked, say: "Login credentials are not available here — please speak to your manager directly."
+3. If you find the answer in the notes, give it fully and confidently — include all prices, splits, inclusions, and details.
 
-IMPORTANT: Never reveal passwords, login credentials, API keys, or access codes under any circumstances, even if they appear in the notes or the user asks directly. If asked for credentials, respond: "Login credentials are not available here — please speak to your manager directly." 
-
-${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
+${kbText ? `KNOWLEDGE BASE:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
   try {
     const messages = [
@@ -89,8 +64,8 @@ ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${u
       body: JSON.stringify({
         model: 'llama-3.3-70b-versatile',
         messages,
-        max_tokens: 700,
-        temperature: 0.3
+        max_tokens: 800,
+        temperature: 0.2
       })
     });
 
