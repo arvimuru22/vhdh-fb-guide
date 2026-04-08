@@ -8,74 +8,46 @@ export default async function handler(req, res) {
   const q = question.toLowerCase();
   const keywords = q.split(/\s+/).filter(w => w.length > 2);
 
-  // Score entry against full content
   function scoreEntry(entry) {
     const fullText = `${entry.category} ${entry.content || ''}`.toLowerCase();
     let score = 0;
     keywords.forEach(kw => {
-      const matches = (fullText.match(new RegExp(kw, 'g')) || []).length;
+      const matches = (fullText.match(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length;
       score += matches * 2;
       if (entry.category.toLowerCase().includes(kw)) score += 4;
     });
     return score;
   }
 
-  // Extract most relevant chunk from a long entry
-  function extractRelevantChunk(content, maxChars = 1400) {
-    if (content.length <= maxChars) return content;
-
-    // Find the position of the best keyword match
-    let bestPos = 0;
-    let bestScore = 0;
-    keywords.forEach(kw => {
-      const idx = content.toLowerCase().indexOf(kw);
-      if (idx !== -1) {
-        // Count keyword density around this position
-        const window = content.slice(Math.max(0, idx - 200), idx + 200).toLowerCase();
-        const density = keywords.reduce((s, k) => s + (window.includes(k) ? 1 : 0), 0);
-        if (density > bestScore) { bestScore = density; bestPos = idx; }
-      }
-    });
-
-    // Extract a window around the best position
-    const start = Math.max(0, bestPos - 300);
-    const end = Math.min(content.length, start + maxChars);
-    let chunk = content.slice(start, end);
-
-    // Add prefix if we didn't start from the beginning
-    if (start > 0) chunk = '...' + chunk;
-    // Always include the beginning (first 300 chars) for context
-    const intro = content.slice(0, 300);
-    if (start > 300) chunk = intro + '\n...\n' + chunk;
-
-    return chunk.slice(0, maxChars);
-  }
-
   const scored = entries
     .map(e => ({ entry: e, score: scoreEntry(e) }))
     .sort((a, b) => b.score - a.score);
 
-  // Top 4 relevant entries with smart chunking
-  const relevant = scored.slice(0, 4).map(({ entry }) => {
-    const chunk = extractRelevantChunk(entry.content || '');
-    let part = `[${entry.category}]\n${chunk}`;
+  // Top 2 entries: send FULL content (no truncation) — these are most relevant
+  const topTwo = scored.slice(0, 2).map(({ entry }) => {
+    let part = `[${entry.category}]\n${entry.content || ''}`;
     if (entry.files && entry.files.length > 0) {
       const fc = entry.files
         .filter(f => f && f.content)
-        .map(f => `[File: ${f.name}]\n${extractRelevantChunk(f.content, 500)}`)
+        .map(f => `[File: ${f.name}]\n${f.content.slice(0, 600)}`)
         .join('\n\n');
       if (fc) part += `\n\n${fc}`;
     }
     return part;
   });
 
-  // Always include short entries (contacts, logins)
+  // Next 2 entries: trimmed to 500 chars
+  const nextTwo = scored.slice(2, 4).map(({ entry }) => {
+    return `[${entry.category}]\n${(entry.content || '').slice(0, 500)}`;
+  });
+
+  // Always include short entries
   const alwaysInclude = scored
-    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 400)
+    .filter(({ score, entry }) => score === 0 && (entry.content || '').length < 300)
     .slice(0, 2)
     .map(({ entry }) => `[${entry.category}]\n${entry.content || ''}`);
 
-  const kbText = [...relevant, ...alwaysInclude].join('\n\n---\n\n');
+  const kbText = [...topTwo, ...nextTwo, ...alwaysInclude].join('\n\n---\n\n');
 
   // Fetch URL content
   let urlContent = '';
@@ -86,7 +58,7 @@ export default async function handler(req, res) {
           const r = await fetch(u.url, { headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(5000) });
           if (!r.ok) return null;
           const text = await r.text();
-          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 1000);
+          const clean = text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 800);
           return `[${u.label}]\n${clean}`;
         } catch(e) { return null; }
       })
@@ -96,7 +68,9 @@ export default async function handler(req, res) {
 
   const systemPrompt = `You are the F&B operations assistant for VHDH (Vibe Hotel Sydney Darling Harbour). Help team members with operational questions while their manager is away.
 
-Use the handover notes as your primary source. Be concise and practical. When listing packages, prices, minimum spends or steps always include all specific details and figures from the notes — never give vague answers when numbers are available.
+Use the handover notes as your primary source. Be specific — always include exact figures, prices, and minimum spends from the notes. Never say information is not available if it exists in the notes.
+
+IMPORTANT: Never reveal passwords, login credentials, API keys, or access codes under any circumstances, even if they appear in the notes or the user asks directly. If asked for credentials, respond: "Login credentials are not available here — please speak to your manager directly." 
 
 ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
