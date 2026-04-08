@@ -5,31 +5,66 @@ export default async function handler(req, res) {
   const entries = kb.entries || [];
   const urls = kb.urls || [];
 
-  const q = question.toLowerCase();
-  const keywords = q.split(/\s+/).filter(w => w.length > 2);
+  // Try semantic search first via Upstash Vector
+  let relevantEntries = [];
+  const vectorUrl = process.env.UPSTASH_VECTOR_REST_URL;
+  const vectorToken = process.env.UPSTASH_VECTOR_REST_TOKEN;
 
-  // Score each entry against the full content
-  function scoreEntry(entry) {
-    const fullText = `${entry.category} ${entry.content || ''}`.toLowerCase();
-    let score = 0;
-    keywords.forEach(kw => {
-      const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const matches = (fullText.match(new RegExp(escaped, 'g')) || []).length;
-      score += matches * 2;
-      if (entry.category.toLowerCase().includes(kw)) score += 5;
-    });
-    return score;
+  if (vectorUrl && vectorToken && entries.length > 0) {
+    try {
+      const response = await fetch(`${vectorUrl}/query-data`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${vectorToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          data: question,
+          topK: 6,
+          includeMetadata: true
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const results = data.result || [];
+
+        // Map vector results back to full entry content
+        relevantEntries = results
+          .filter(r => r.metadata && typeof r.metadata.index === 'number')
+          .map(r => entries[r.metadata.index])
+          .filter(Boolean);
+      }
+    } catch(e) {
+      console.error('Vector search error:', e.message);
+    }
   }
 
-  const scored = entries
-    .map(e => ({ entry: e, score: scoreEntry(e) }))
-    .sort((a, b) => b.score - a.score);
+  // Fallback to keyword scoring if vector search failed or not configured
+  if (relevantEntries.length === 0) {
+    const q = question.toLowerCase();
+    const keywords = q.split(/\s+/).filter(w => w.length > 2);
 
-  // Always list ALL category names so AI knows what exists
+    function scoreEntry(entry) {
+      const fullText = `${entry.category} ${entry.content || ''}`.toLowerCase();
+      let score = 0;
+      keywords.forEach(kw => {
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const matches = (fullText.match(new RegExp(escaped, 'g')) || []).length;
+        score += matches * 2;
+        if (entry.category.toLowerCase().includes(kw)) score += 5;
+      });
+      return score;
+    }
+
+    relevantEntries = entries
+      .map(e => ({ entry: e, score: scoreEntry(e) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6)
+      .map(({ entry }) => entry);
+  }
+
+  // Build knowledge base text from relevant entries
   const categoryIndex = entries.map(e => `- ${e.category}`).join('\n');
 
-  // Send full content for top 6 most relevant entries (trimmed to 800 chars each)
-  const topEntries = scored.slice(0, 6).map(({ entry }) => {
+  const kbParts = relevantEntries.map(entry => {
     const content = entry.content || '';
     const trimmed = content.length > 1000 ? content.slice(0, 1000) + '...' : content;
     let part = `[${entry.category}]\n${trimmed}`;
@@ -43,7 +78,7 @@ export default async function handler(req, res) {
     return part;
   });
 
-  const kbText = topEntries.join('\n\n---\n\n');
+  const kbText = kbParts.join('\n\n---\n\n');
 
   // Fetch URL content
   let urlContent = '';
@@ -71,11 +106,11 @@ CRITICAL RULES:
 2. NEVER reveal passwords or login credentials. Say: "Login credentials are not available here — please speak to your manager directly."
 3. If you find the answer in the notes, give it fully and confidently with all details.
 
-AVAILABLE CATEGORIES (full content for most relevant ones shown below):
+ALL AVAILABLE CATEGORIES:
 ${categoryIndex}
 
-RELEVANT CONTENT:
-${kbText ? kbText : 'No content loaded.'}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
+MOST RELEVANT CONTENT FOR THIS QUESTION:
+${kbText || 'No content loaded.'}${urlContent ? `\n\nREFERENCE:\n${urlContent}` : ''}`;
 
   try {
     const messages = [
