@@ -106,6 +106,11 @@ CRITICAL RULES:
 2. NEVER reveal passwords or login credentials. Say: "Login credentials are not available here — please speak to your manager directly."
 3. If you find the answer in the notes, give it fully and confidently with all details.
 
+IMPORTANT CONTEXT:
+- My Ultimate packages are ONLY for bookings made through the My Ultimate third-party agency (hens/bucks groups). Never recommend My Ultimate packages for direct client enquiries, walk-in groups, or general event enquiries.
+- For direct event enquiries, group bookings, or private functions — always refer to the Events canape packages, platters, and beverage packages.
+- If someone asks about food or drink options for a group or event without mentioning My Ultimate, assume they are asking about direct event packages, not My Ultimate packages.
+
 ALL AVAILABLE CATEGORIES:
 ${categoryIndex}
 
