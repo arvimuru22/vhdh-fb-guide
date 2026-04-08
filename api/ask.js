@@ -31,7 +31,7 @@ export default async function handler(req, res) {
   // Send full content for top 6 most relevant entries (trimmed to 800 chars each)
   const topEntries = scored.slice(0, 6).map(({ entry }) => {
     const content = entry.content || '';
-    const trimmed = content.length > 800 ? content.slice(0, 800) + '...' : content;
+    const trimmed = content.length > 1000 ? content.slice(0, 1000) + '...' : content;
     let part = `[${entry.category}]\n${trimmed}`;
     if (entry.files && entry.files.length > 0) {
       const fc = entry.files
