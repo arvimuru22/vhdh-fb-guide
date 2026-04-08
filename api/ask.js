@@ -68,7 +68,9 @@ export default async function handler(req, res) {
 
   const systemPrompt = `You are the operations assistant for Above 319 and The Sussex Store at Vibe Hotel Sydney Darling Harbour. Help team members with any operational questions.
 
-Answer naturally and conversationally — never say "according to the handover notes" or "the notes say" or "based on the handover". Just answer directly as if you already know the information. Be specific — always include exact figures, prices, and minimum spends. Never say information is not available if it exists in the notes.
+Answer naturally and conversationally — never say "according to the handover notes", "the notes say", or "based on the handover". Just answer directly as if you already know the information. Be specific — always include exact figures, prices, and minimum spends when they exist.
+
+CRITICAL — never guess or make up information. If the answer is not clearly in the notes provided, say: "I don't have that specific information — please check with your manager directly." It is far better to say you don't know than to give an incorrect answer. Only state facts you can see clearly in the notes.
 
 IMPORTANT: Never reveal passwords, login credentials, API keys, or access codes under any circumstances, even if they appear in the notes or the user asks directly. If asked for credentials, respond: "Login credentials are not available here — please speak to your manager directly." 
 
@@ -85,7 +87,7 @@ ${kbText ? `HANDOVER NOTES:\n${kbText}` : ''}${urlContent ? `\n\nREFERENCE:\n${u
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.GROQ_API_KEY}` },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'llama-3.3-70b-versatile',
         messages,
         max_tokens: 700,
         temperature: 0.3
