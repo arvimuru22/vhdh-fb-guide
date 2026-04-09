@@ -129,8 +129,34 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
     <div class="logo-dot"></div>
     <h1>VHDH F&amp;B Guide</h1>
     <span class="badge">Admin</span>
-    <button class="btn-logout" onclick="logout()">Sign out</button>
+    <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <button class="btn-ghost" onclick="showTab('kb')" id="tab-kb" style="border-color:#1c1c1a;color:#1c1c1a;">Knowledge Base</button>
+      <button class="btn-ghost" onclick="showTab('history')" id="tab-history">Search History</button>
+      <button class="btn-ghost" onclick="showTab('feedback')" id="tab-feedback">Feedback</button>
+      <button class="btn-logout" onclick="logout()">Sign out</button>
+    </div>
   </div>
+  
+  <!-- History Panel -->
+  <div id="panel-history" style="display:none;">
+    <div class="card">
+      <div class="section-title">Search History</div>
+      <div class="section-sub">Every question asked by your team — most recent first. Use this to spot gaps in the knowledge base.</div>
+      <div id="history-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- Feedback Panel -->
+  <div id="panel-feedback" style="display:none;">
+    <div class="card">
+      <div class="section-title">Feedback — Flagged Responses</div>
+      <div class="section-sub">Responses your team marked with 👎. Review and update the knowledge base accordingly.</div>
+      <div id="feedback-list" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"></div>
+    </div>
+  </div>
+
+  <!-- KB Panel -->
+  <div id="panel-kb">
 
   <div class="banner">
     <strong>Team link:</strong> Share <strong id="team-url"></strong> — they get a clean chat with no admin access.
@@ -165,7 +191,8 @@ body { font-family: var(--font); background: var(--bg); color: var(--text); min-
     <button class="btn-add" onclick="addUrl()">+ Add URL</button>
   </div>
 
-  <div class="action-bar">
+  </div><!-- end panel-kb -->
+  <div class="action-bar" id="action-bar">
     <button class="btn-save" id="save-btn" onclick="saveAll()">Save &amp; sync to team</button>
     <span class="status" id="save-status"></span>
   </div>
@@ -369,6 +396,56 @@ async function saveAll() {
 }
 
 function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function showTab(tab) {
+  ['kb','history','feedback'].forEach(t => {
+    document.getElementById('panel-' + t).style.display = t === tab ? 'block' : 'none';
+    const btn = document.getElementById('tab-' + t);
+    if (btn) { btn.style.borderColor = t === tab ? '#1c1c1a' : ''; btn.style.color = t === tab ? '#1c1c1a' : ''; }
+  });
+  document.getElementById('action-bar').style.display = tab === 'kb' ? 'flex' : 'none';
+  if (tab === 'history') loadHistory();
+  if (tab === 'feedback') loadFeedback();
+}
+
+async function loadHistory() {
+  const pwd = sessionStorage.getItem(SESSION_KEY);
+  const list = document.getElementById('history-list');
+  list.innerHTML = '<div style="font-size:13px;color:var(--muted);">Loading...</div>';
+  try {
+    const res = await fetch(`/api/history?password=${encodeURIComponent(pwd)}`);
+    const data = await res.json();
+    const items = data.history || [];
+    if (items.length === 0) { list.innerHTML = '<div style="font-size:13px;color:var(--muted);">No searches yet.</div>'; return; }
+    list.innerHTML = items.map(item => `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 16px;">
+        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:4px;">${escHtml(item.question)}</div>
+        <div style="font-size:12px;color:var(--muted);">${new Date(item.timestamp).toLocaleString('en-AU')}</div>
+      </div>
+    `).join('');
+  } catch(e) { list.innerHTML = '<div style="font-size:13px;color:var(--red);">Failed to load history.</div>'; }
+}
+
+async function loadFeedback() {
+  const pwd = sessionStorage.getItem(SESSION_KEY);
+  const list = document.getElementById('feedback-list');
+  list.innerHTML = '<div style="font-size:13px;color:var(--muted);">Loading...</div>';
+  try {
+    const res = await fetch(`/api/feedback-list?password=${encodeURIComponent(pwd)}`);
+    const data = await res.json();
+    const items = (data.feedback || []).filter(f => f.rating === 'down');
+    if (items.length === 0) { list.innerHTML = '<div style="font-size:13px;color:var(--muted);">No thumbs down feedback yet. 🎉</div>'; return; }
+    list.innerHTML = items.map(item => `
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:var(--radius);padding:12px 16px;">
+        <div style="font-size:13px;font-weight:500;color:var(--text);margin-bottom:4px;">👎 ${escHtml(item.question)}</div>
+        <div style="font-size:12px;color:#6b6b6b;margin-bottom:6px;">${escHtml(item.answer ? item.answer.slice(0, 200) + '...' : '')}</div>
+        <div style="font-size:11px;color:var(--muted);">${new Date(item.timestamp).toLocaleString('en-AU')}</div>
+      </div>
+    `).join('');
+  } catch(e) { list.innerHTML = '<div style="font-size:13px;color:var(--red);">Failed to load feedback.</div>'; }
+}
+
+function escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 window.addEventListener('DOMContentLoaded', () => {
   const saved = sessionStorage.getItem(SESSION_KEY);
